@@ -9,6 +9,7 @@ use syn::{Ident, LitStr};
 
 use proc_macro2::TokenStream as TokenStream2;
 
+use crate::fragment::{parse_route_fragment, FragmentSegment};
 use crate::layout::Layout;
 use crate::layout::LayoutId;
 use crate::nest::Nest;
@@ -56,6 +57,7 @@ pub(crate) struct Route {
     pub route: String,
     pub segments: Vec<RouteSegment>,
     pub query: Option<QuerySegment>,
+    pub fragment: Option<FragmentSegment>,
     pub nests: Vec<NestId>,
     pub layouts: Vec<LayoutId>,
     fields: Vec<(Ident, Type)>,
@@ -74,6 +76,7 @@ impl Route {
         let route;
         let ty;
         let route_name = variant.ident.clone();
+
         match route_attr {
             Some(attr) => {
                 let args = attr.parse_args::<RouteArgs>()?;
@@ -152,12 +155,14 @@ impl Route {
             )?
         };
 
+        let fragment = parse_route_fragment(&route);
         Ok(Self {
             ty,
             route_name,
             segments: route_segments,
             route,
             query,
+            fragment,
             nests,
             layouts,
             fields,

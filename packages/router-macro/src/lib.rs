@@ -17,6 +17,7 @@ use proc_macro2::TokenStream as TokenStream2;
 
 use crate::{layout::LayoutId, route_tree::RouteTree};
 
+mod fragment;
 mod layout;
 mod nest;
 mod query;
