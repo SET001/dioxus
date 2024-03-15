@@ -74,6 +74,7 @@ impl CallBody {
             roots: &self.roots,
             location: None,
         };
+
         renderer.update_template::<Ctx>(template, location)
     }
 
@@ -84,10 +85,13 @@ impl CallBody {
             location: Some(location),
         };
 
+        // Empty templates just are placeholders for "none"
+        if self.roots.is_empty() {
+            return quote! { None };
+        }
+
         quote! {
-            Some({
-                #body
-            })
+            Some({ #body })
         }
     }
 }
@@ -110,20 +114,20 @@ impl Parse for CallBody {
     }
 }
 
-#[derive(Default, Debug)]
-pub struct RenderCallBody(pub CallBody);
-
-impl ToTokens for RenderCallBody {
+impl ToTokens for CallBody {
     fn to_tokens(&self, out_tokens: &mut TokenStream2) {
         let body: TemplateRenderer = TemplateRenderer {
-            roots: &self.0.roots,
+            roots: &self.roots,
             location: None,
         };
 
+        // Empty templates just are placeholders for "none"
+        if self.roots.is_empty() {
+            return out_tokens.append_all(quote! { None });
+        }
+
         out_tokens.append_all(quote! {
-            Some({
-                #body
-            })
+            Some({ #body })
         })
     }
 }
@@ -145,6 +149,7 @@ impl<'a> TemplateRenderer<'a> {
         let mut context = DynamicContext::default();
 
         let mut roots = Vec::new();
+
         for (idx, root) in self.roots.iter().enumerate() {
             context.current_path.push(idx as u8);
             roots.push(context.update_node::<Ctx>(root, &mut mapping)?);
@@ -240,12 +245,16 @@ impl<'a> ToTokens for TemplateRenderer<'a> {
                 attr_paths: &[ #(#attr_paths),* ],
             };
 
-            dioxus_core::VNode::new(
-                #key_tokens,
-                TEMPLATE,
-                Box::new([ #( #node_printer),* ]),
-                Box::new([ #(#dyn_attr_printer),* ]),
-            )
+            {
+                // NOTE: Allocating a temporary is important to make reads within rsx drop before the value is returned
+                let __vnodes = dioxus_core::VNode::new(
+                    #key_tokens,
+                    TEMPLATE,
+                    Box::new([ #( #node_printer),* ]),
+                    Box::new([ #(#dyn_attr_printer),* ]),
+                );
+                __vnodes
+            }
         });
     }
 }

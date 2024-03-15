@@ -16,13 +16,14 @@ pub(crate) struct Scope {
     pub(crate) parent_id: Option<ScopeId>,
     pub(crate) height: u32,
     pub(crate) render_count: Cell<usize>,
-    pub(crate) suspended: Cell<bool>,
 
     // Note: the order of the hook and context fields is important. The hooks field must be dropped before the contexts field in case a hook drop implementation tries to access a context.
     pub(crate) hooks: RefCell<Vec<Box<dyn Any>>>,
     pub(crate) hook_index: Cell<usize>,
     pub(crate) shared_contexts: RefCell<Vec<Box<dyn Any>>>,
     pub(crate) spawned_tasks: RefCell<FxHashSet<Task>>,
+    /// The task that was last spawned that may suspend. We use this task to check what task to suspend in the event of an early None return from a component
+    pub(crate) last_suspendable_task: Cell<Option<Task>>,
     pub(crate) before_render: RefCell<Vec<Box<dyn FnMut()>>>,
     pub(crate) after_render: RefCell<Vec<Box<dyn FnMut()>>>,
 }
@@ -40,9 +41,9 @@ impl Scope {
             parent_id,
             height,
             render_count: Cell::new(0),
-            suspended: Cell::new(false),
             shared_contexts: RefCell::new(vec![]),
             spawned_tasks: RefCell::new(FxHashSet::default()),
+            last_suspendable_task: Cell::new(None),
             hooks: RefCell::new(vec![]),
             hook_index: Cell::new(0),
             before_render: RefCell::new(vec![]),
@@ -226,6 +227,37 @@ impl Scope {
         .expect("Runtime to exist")
     }
 
+    /// Start a new future on the same thread as the rest of the VirtualDom.
+    ///
+    /// **You should generally use `spawn` instead of this method unless you specifically need to need to run a task during suspense**
+    ///
+    /// This future will not contribute to suspense resolving but it will run during suspense.
+    ///
+    /// Because this future runs during suspense, you need to be careful to work with hydration. It is not recommended to do any async IO work in this future, as it can easily cause hydration issues. However, you can use isomorphic tasks to do work that can be consistently replicated on the server and client like logging or responding to state changes.
+    ///
+    /// ```rust, no_run
+    /// # use dioxus::prelude::*;
+    /// // ❌ Do not do requests in isomorphic tasks. It may resolve at a different time on the server and client, causing hydration issues.
+    /// let mut state = use_signal(|| None);
+    /// spawn_isomorphic(async move {
+    ///     state.set(Some(reqwest::get("https://api.example.com").await));
+    /// });
+    ///
+    /// // ✅ You may wait for a signal to change and then log it
+    /// let mut state = use_signal(|| 0);
+    /// spawn_isomorphic(async move {
+    ///     loop {
+    ///         tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+    ///         println!("State is {state}");
+    ///     }
+    /// });
+    /// ```
+    pub fn spawn_isomorphic(&self, fut: impl Future<Output = ()> + 'static) -> Task {
+        let id = Runtime::with(|rt| rt.spawn_isomorphic(self.id, fut)).expect("Runtime to exist");
+        self.spawned_tasks.borrow_mut().insert(id);
+        id
+    }
+
     /// Spawns the future but does not return the [`TaskId`]
     pub fn spawn(&self, fut: impl Future<Output = ()> + 'static) -> Task {
         let id = Runtime::with(|rt| rt.spawn(self.id, fut)).expect("Runtime to exist");
@@ -241,9 +273,9 @@ impl Scope {
         Runtime::with(|rt| rt.spawn(self.id, fut)).expect("Runtime to exist")
     }
 
-    /// Mark this component as suspended and then return None
-    pub fn suspend(&self) -> Option<Element> {
-        self.suspended.set(true);
+    /// Mark this component as suspended on a specific task and then return None
+    pub fn suspend(&self, task: Task) -> Option<Element> {
+        self.last_suspendable_task.set(Some(task));
         None
     }
 
@@ -340,10 +372,10 @@ impl ScopeId {
             .expect("to be in a dioxus runtime")
     }
 
-    /// Suspends the current component
-    pub fn suspend(self) -> Option<Element> {
+    /// Suspended a component on a specific task and then return None
+    pub fn suspend(self, task: Task) -> Option<Element> {
         Runtime::with_scope(self, |cx| {
-            cx.suspend();
+            cx.suspend(task);
         });
         None
     }

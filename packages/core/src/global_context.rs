@@ -50,10 +50,39 @@ pub fn provide_root_context<T: 'static + Clone>(value: T) -> T {
         .expect("to be in a dioxus runtime")
 }
 
-/// Suspends the current component
-pub fn suspend() -> Option<Element> {
-    Runtime::with_current_scope(|cx| cx.suspend());
+/// Suspended the current component on a specific task and then return None
+pub fn suspend(task: Task) -> Element {
+    Runtime::with_current_scope(|cx| cx.suspend(task));
     None
+}
+
+/// Start a new future on the same thread as the rest of the VirtualDom.
+///
+/// **You should generally use `spawn` instead of this method unless you specifically need to need to run a task during suspense**
+///
+/// This future will not contribute to suspense resolving but it will run during suspense.
+///
+/// Because this future runs during suspense, you need to be careful to work with hydration. It is not recommended to do any async IO work in this future, as it can easily cause hydration issues. However, you can use isomorphic tasks to do work that can be consistently replicated on the server and client like logging or responding to state changes.
+///
+/// ```rust, no_run
+/// # use dioxus::prelude::*;
+/// // ❌ Do not do requests in isomorphic tasks. It may resolve at a different time on the server and client, causing hydration issues.
+/// let mut state = use_signal(|| None);
+/// spawn_isomorphic(async move {
+///     state.set(Some(reqwest::get("https://api.example.com").await));
+/// });
+///
+/// // ✅ You may wait for a signal to change and then log it
+/// let mut state = use_signal(|| 0);
+/// spawn_isomorphic(async move {
+///     loop {
+///         tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+///         println!("State is {state}");
+///     }
+/// });
+/// ```
+pub fn spawn_isomorphic(fut: impl Future<Output = ()> + 'static) -> Task {
+    Runtime::with_current_scope(|cx| cx.spawn_isomorphic(fut)).expect("to be in a dioxus runtime")
 }
 
 /// Spawns the future but does not return the [`TaskId`]
@@ -250,19 +279,18 @@ pub fn after_render(f: impl FnMut() + 'static) {
     Runtime::with_current_scope(|cx| cx.push_after_render(f));
 }
 
-/// Wait for the virtualdom to finish its sync work before proceeding
+/// Wait for the next render to complete
 ///
 /// This is useful if you've just triggered an update and want to wait for it to finish before proceeding with valid
 /// DOM nodes.
 ///
-/// Effects rely on this to ensure that they only run effects after the DOM has been updated. Without flush_sync effects
+/// Effects rely on this to ensure that they only run effects after the DOM has been updated. Without wait_for_next_render effects
 /// are run immediately before diffing the DOM, which causes all sorts of out-of-sync weirdness.
-pub async fn flush_sync() {
+pub async fn wait_for_next_render() {
     // Wait for the flush lock to be available
     // We release it immediately, so it's impossible for the lock to be held longer than this function
-    Runtime::with(|rt| rt.flush_mutex.clone())
+    Runtime::with(|rt| rt.render_signal.subscribe())
         .unwrap()
-        .lock()
         .await;
 }
 

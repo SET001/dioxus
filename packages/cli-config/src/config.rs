@@ -7,12 +7,17 @@ use std::path::PathBuf;
 #[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Debug)]
 #[cfg_attr(feature = "cli", derive(clap::ValueEnum))]
 pub enum Platform {
+    /// Targeting the web platform using WASM
     #[cfg_attr(feature = "cli", clap(name = "web"))]
     #[serde(rename = "web")]
     Web,
+
+    /// Targeting the desktop platform using Tao/Wry-based webview
     #[cfg_attr(feature = "cli", clap(name = "desktop"))]
     #[serde(rename = "desktop")]
     Desktop,
+
+    /// Targeting the server platform using Axum and Dioxus-Fullstack
     #[cfg_attr(feature = "cli", clap(name = "fullstack"))]
     #[serde(rename = "fullstack")]
     Fullstack,
@@ -176,6 +181,7 @@ impl Default for DioxusConfig {
                 default_platform: default_platform(),
                 out_dir: out_dir_default(),
                 asset_dir: asset_dir_default(),
+                hot_reload: hot_reload_default(),
 
                 #[cfg(feature = "cli")]
                 tools: Default::default(),
@@ -219,12 +225,18 @@ impl Default for DioxusConfig {
 pub struct ApplicationConfig {
     #[serde(default = "default_name")]
     pub name: String,
+
     #[serde(default = "default_platform")]
     pub default_platform: Platform,
+
     #[serde(default = "out_dir_default")]
     pub out_dir: PathBuf,
+
     #[serde(default = "asset_dir_default")]
     pub asset_dir: PathBuf,
+
+    #[serde(default = "hot_reload_default")]
+    pub hot_reload: bool,
 
     #[cfg(feature = "cli")]
     #[serde(default)]
@@ -240,6 +252,10 @@ fn default_name() -> String {
 
 fn default_platform() -> Platform {
     Platform::Web
+}
+
+fn hot_reload_default() -> bool {
+    true
 }
 
 fn asset_dir_default() -> PathBuf {
@@ -293,8 +309,10 @@ pub struct WebProxyConfig {
 pub struct WebWatcherConfig {
     #[serde(default = "watch_path_default")]
     pub watch_path: Vec<PathBuf>,
+
     #[serde(default)]
     pub reload_html: bool,
+
     #[serde(default = "true_bool")]
     pub index_on_404: bool,
 }
@@ -360,6 +378,16 @@ pub enum ExecutableType {
     Binary(String),
     Lib(String),
     Example(String),
+}
+
+impl ExecutableType {
+    /// Get the name of the executable if it is a binary or an example.
+    pub fn executable(&self) -> Option<&str> {
+        match self {
+            Self::Binary(bin) | Self::Example(bin) => Some(bin),
+            _ => None,
+        }
+    }
 }
 
 impl CrateConfig {
@@ -511,6 +539,34 @@ impl CrateConfig {
 
     pub fn set_cargo_args(&mut self, cargo_args: Vec<String>) -> &mut Self {
         self.cargo_args = cargo_args;
+        self
+    }
+
+    pub fn add_features(&mut self, feature: Vec<String>) -> &mut Self {
+        if let Some(features) = &mut self.features {
+            features.extend(feature);
+        } else {
+            self.features = Some(feature);
+        }
+        self
+    }
+
+    #[cfg(feature = "cli")]
+    pub fn extend_with_platform(&mut self, platform: Platform) -> &mut Self {
+        let manifest = &self.manifest;
+        let features = match platform {
+            Platform::Web if manifest.features.contains_key("web") => {
+                vec!["web".to_string()]
+            }
+            Platform::Desktop if manifest.features.contains_key("desktop") => {
+                vec!["desktop".to_string()]
+            }
+            _ => {
+                // fullstack has its own feature insertion - we use a different featureset for the client and server
+                vec![]
+            }
+        };
+        self.add_features(features);
         self
     }
 }

@@ -1,10 +1,12 @@
 use dioxus_core::prelude::*;
 use dioxus_signals::ReactiveContext;
+use futures_util::StreamExt;
 
 /// `use_effect` will subscribe to any changes in the signal values it captures
 /// effects will always run after first mount and then whenever the signal values change
 /// If the use_effect call was skipped due to an early return, the effect will no longer activate.
 /// ```rust
+/// # use dioxus::prelude::*;
 /// fn app() -> Element {
 ///     let mut count = use_signal(|| 0);
 ///     //the effect runs again each time count changes
@@ -26,16 +28,16 @@ pub fn use_effect(mut callback: impl FnMut() + 'static) {
 
     use_hook(|| {
         spawn(async move {
-            let rc = ReactiveContext::new_with_origin(location);
+            let (rc, mut changed) = ReactiveContext::new_with_origin(location);
             loop {
-                // Wait for the dom the be finished with sync work
-                // flush_sync().await;
-
                 // Run the effect
                 rc.run_in(&mut callback);
 
                 // Wait for context to change
-                rc.changed().await;
+                let _ = changed.next().await;
+
+                // Wait for the dom the be finished with sync work
+                wait_for_next_render().await;
             }
         });
     });
